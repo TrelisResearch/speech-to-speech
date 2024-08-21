@@ -899,6 +899,12 @@ def prepare_args(args, prefix):
 
     args.__dict__["gen_kwargs"] = gen_kwargs
 
+import signal
+
+def signal_handler(signum, frame):
+    global stop_event
+    print("\nInterrupted. Stopping all processes...")
+    stop_event.set()
 
 def main():
     parser = HfArgumentParser((
@@ -953,12 +959,13 @@ def main():
     prepare_args(parler_tts_handler_kwargs, "tts") 
 
     # 3. Build the pipeline
+    global stop_event
     stop_event = Event()
     # used to stop putting received audio chunks in queue until all setences have been processed by the TTS
     should_listen = Event() 
     recv_audio_chunks_queue = Queue()
     send_audio_chunks_queue = Queue()
-    spoken_prompt_queue = Queue() 
+    spoken_prompt_queue = Queue()
     text_prompt_queue = Queue()
     lm_response_queue = Queue()
     
@@ -1003,15 +1010,20 @@ def main():
         send_audio_chunks_queue,
         host=socket_sender_kwargs.send_host,
         port=socket_sender_kwargs.send_port,
-        )
+    )
+    # 4. Set up signal handler for immediate interruption
+    signal.signal(signal.SIGINT, signal_handler)
 
-    # 4. Run the pipeline
-    try:
-        pipeline_manager = ThreadManager([vad, tts, lm, stt, recv_handler, send_handler])
-        pipeline_manager.start()
+    # 5. Run the pipeline
+    pipeline_manager = ThreadManager([vad, tts, lm, stt, recv_handler, send_handler])
+    pipeline_manager.start()
 
-    except KeyboardInterrupt:
-        pipeline_manager.stop()
-    
+    # Wait for the stop event to be set
+    stop_event.wait()
+
+    # Clean up and stop all threads
+    pipeline_manager.stop()
+    logger.info("All processes stopped. Exiting.")
+
 if __name__ == "__main__":
     main()
